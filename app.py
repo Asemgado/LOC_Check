@@ -4,10 +4,6 @@ from google.genai import types
 import PyPDF2
 from PIL import Image
 import os
-from dotenv import load_dotenv
-
-# Load environment variables from .env file
-load_dotenv()
 
 def configure_gemini_api(api_key: str) -> bool:
     """Configure Google Gemini API with provided key"""
@@ -169,24 +165,25 @@ st.set_page_config(
 if 'knowledge_base' not in st.session_state:
     st.session_state.knowledge_base = ""
 if 'gemini_api_key' not in st.session_state:
-    # Load API key from environment variable
-    st.session_state.gemini_api_key = os.getenv('GEMINI_API_KEY', '')
+    st.session_state.gemini_api_key = ''
 if 'uploaded_pdf_file' not in st.session_state:
     st.session_state.uploaded_pdf_file = None
 if 'gemini_client' not in st.session_state:
     st.session_state.gemini_client = None
+if 'default_pdf_loaded' not in st.session_state:
+    st.session_state.default_pdf_loaded = False
 
-# Auto-configure Gemini API if key is available
-if st.session_state.gemini_api_key and not st.session_state.gemini_client:
-    configure_gemini_api(st.session_state.gemini_api_key)
-
-# Auto-load default PDF if available and no other PDF is loaded
-if not st.session_state.uploaded_pdf_file and not st.session_state.knowledge_base:
+def load_default_pdf():
+    """Load the default PDF when API key is configured"""
+    if st.session_state.default_pdf_loaded or st.session_state.uploaded_pdf_file or st.session_state.knowledge_base:
+        return
+    
     default_pdf_path = "/home/asemgado/github/LOC_Check/Splicing-Testing-Labeling-Deck.pdf"
     if os.path.exists(default_pdf_path) and st.session_state.gemini_client:
         try:
             pdf_ref = st.session_state.gemini_client.files.upload(file=default_pdf_path)
             st.session_state.uploaded_pdf_file = pdf_ref
+            st.session_state.default_pdf_loaded = True
         except Exception:
             # Fallback to text extraction if upload fails
             try:
@@ -197,6 +194,7 @@ if not st.session_state.uploaded_pdf_file and not st.session_state.knowledge_bas
                         text += page.extract_text() + "\n"
                     if text:
                         st.session_state.knowledge_base = text
+                        st.session_state.default_pdf_loaded = True
             except Exception:
                 pass
 
@@ -204,23 +202,35 @@ def main():
     st.title("🔌 Cable Inspection App")
     st.markdown("Upload cable/slack images and PDF criteria to get AI-powered approval decisions")
     
+    # Try to load default PDF if API key is already configured
+    if st.session_state.gemini_client and not st.session_state.default_pdf_loaded:
+        load_default_pdf()
+    
     # Sidebar for configuration
     with st.sidebar:
         st.header("Configuration")
         
-        # API Key input
+        # API Key input (mandatory)
         api_key = st.text_input(
-            "Enter Google Gemini API Key:",
+            "Enter Google Gemini API Key (Required):",
             type="password",
             value=st.session_state.gemini_api_key,
-            help="Get your API key from Google AI Studio"
+            help="Get your API key from Google AI Studio",
+            placeholder="Enter your Gemini API key here..."
         )
+        
+        if not api_key:
+            st.warning("⚠️ Please enter your Gemini API key to continue")
         
         if api_key != st.session_state.gemini_api_key:
             st.session_state.gemini_api_key = api_key
             if api_key:
                 if configure_gemini_api(api_key):
                     st.success("✅ API Key configured successfully")
+                    # Load default PDF after API key is configured
+                    load_default_pdf()
+                    if st.session_state.default_pdf_loaded:
+                        st.info("📄 Default knowledge base PDF loaded automatically")
                 else:
                     st.error("❌ Failed to configure API Key")
         
