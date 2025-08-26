@@ -2,7 +2,9 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from google import genai
 from google.genai import types
-import tempfile, os, uvicorn
+import tempfile
+import os
+import uvicorn
 from typing import List
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -35,6 +37,8 @@ pdf_path = os.path.join(os.getcwd(), 'knowledge_base.pdf')
 pdf_knowledge_base = client.files.upload(file=pdf_path)
 
 # Response model
+
+
 class InspectionResponse(BaseModel):
     verdict: str
     analysis: str
@@ -42,16 +46,18 @@ class InspectionResponse(BaseModel):
     recommendations: List[str]
     confidence_score: float
 
+
 # System prompts for different endpoints
-VAULT_CONDUIT_PROMPT = """
-You are a specialized vault and conduit inspection expert. Analyze the uploaded image specifically for vault and conduit compliance against the PDF knowledge base.
+SEALING_PROMPT = """
+You are a sealing inspection expert. Analyze the uploaded image for proper sealing installations and compliance against the PDF knowledge base.
 
 Focus on:
-- Vault dimensions and specifications
-- Conduit routing and installation
-- Access and maintenance requirements
-- Safety clearances
-- Code compliance for underground installations
+- Seal integrity and material condition
+- Proper sealing compound application
+- Gasket and O-ring positioning
+- Waterproofing effectiveness
+- Joint sealing quality
+- Environmental protection seals
 
 Provide SHORT and SPECIFIC analysis. Keep responses concise and technical.
 
@@ -63,15 +69,16 @@ Format your response as:
 **CONFIDENCE:** [Score from 0.0 to 1.0]
 """
 
-INSTALLATION_PROMPT = """
-You are a cable installation specialist. Analyze the uploaded image for proper cable installation techniques and compliance with the PDF knowledge base.
+VAULT_FLOODING_PROMPT = """
+You are a vault flooding prevention specialist. Analyze the uploaded image for vault flooding risks and protection measures compliance against the PDF knowledge base.
 
 Focus on:
-- Cable routing and support
-- Bend radius compliance
-- Termination quality
-- Installation workmanship
-- Environmental protection
+- Water ingress prevention systems
+- Drainage adequacy and functionality
+- Waterproof sealing around cables
+- Vault floor slope and water management
+- Sump pump installation and operation
+- Emergency water removal provisions
 
 Provide SHORT and SPECIFIC analysis. Keep responses concise and technical.
 
@@ -83,15 +90,16 @@ Format your response as:
 **CONFIDENCE:** [Score from 0.0 to 1.0]
 """
 
-DECK_PROMPT = """
-You are a deck and above-ground cable inspection expert. Analyze the uploaded image for deck-level cable installations and compliance with the PDF knowledge base.
+DUCT_BEND_PROMPT = """
+You are a duct bend installation specialist. Analyze the uploaded image for proper duct bend installations and compliance against the PDF knowledge base.
 
 Focus on:
-- Deck penetration sealing
-- Cable support and protection
-- Weather exposure protection
-- Accessibility for maintenance
-- Structural integrity
+- Bend radius adherence to specifications
+- Duct integrity at bend points
+- Proper bend installation techniques
+- Cable pulling tension considerations
+- Joint sealing at bend connections
+- Structural support for bent sections
 
 Provide SHORT and SPECIFIC analysis. Keep responses concise and technical.
 
@@ -102,6 +110,7 @@ Format your response as:
 **RECOMMENDATIONS:** [Specific actionable recommendations - max 2 points]
 **CONFIDENCE:** [Score from 0.0 to 1.0]
 """
+
 
 def parse_analysis_response(response_text: str) -> InspectionResponse:
     """Parse Gemini response into structured format"""
@@ -118,17 +127,20 @@ def parse_analysis_response(response_text: str) -> InspectionResponse:
         for line in lines:
             line = line.strip()
             if line.startswith('**VERDICT:'):
-                verdict = line.replace('**VERDICT:', '').replace('**', '').strip()
+                verdict = line.replace(
+                    '**VERDICT:', '').replace('**', '').strip()
             elif line.startswith('**ANALYSIS:'):
                 current_section = 'analysis'
-                analysis = line.replace('**ANALYSIS:', '').replace('**', '').strip()
+                analysis = line.replace(
+                    '**ANALYSIS:', '').replace('**', '').strip()
             elif line.startswith('**ISSUES:'):
                 current_section = 'issues'
             elif line.startswith('**RECOMMENDATIONS:'):
                 current_section = 'recommendations'
             elif line.startswith('**CONFIDENCE:'):
                 try:
-                    conf_text = line.replace('**CONFIDENCE:', '').replace('**', '').strip()
+                    conf_text = line.replace(
+                        '**CONFIDENCE:', '').replace('**', '').strip()
                     confidence = float(conf_text)
                 except:
                     confidence = 0.5
@@ -161,11 +173,13 @@ def parse_analysis_response(response_text: str) -> InspectionResponse:
             confidence_score=0.0
         )
 
+
 async def analyze_image(image_file: UploadFile, prompt: str) -> InspectionResponse:
     """Analyze image using Gemini with the specified prompt"""
     try:
         if not pdf_knowledge_base:
-            raise HTTPException(status_code=500, detail="PDF knowledge base not loaded")
+            raise HTTPException(
+                status_code=500, detail="PDF knowledge base not loaded")
 
         # Save uploaded image to temporary file
         with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as temp_file:
@@ -176,7 +190,7 @@ async def analyze_image(image_file: UploadFile, prompt: str) -> InspectionRespon
         try:
             # Upload image to Gemini
             uploaded_image = client.files.upload(file=temp_path)
-            
+
             # Generate content with prompt, PDF knowledge base, and image
             response = client.models.generate_content(
                 model="gemini-2.5-flash",
@@ -198,34 +212,38 @@ async def analyze_image(image_file: UploadFile, prompt: str) -> InspectionRespon
             recommendations=["Please try again or contact support"],
             confidence_score=0.0
         )
-    
+
+
 @app.get("/")
 async def root():
     return {"message": "Welcome to the Inspection API"}
 
+
 @app.post("/sealing", response_model=InspectionResponse)
-async def inspect_vault_conduit(image: UploadFile = File(..., description="Image of vault or conduit installation")):
-    """Analyze vault and conduit installations for compliance with standards."""
+async def inspect_sealing(image: UploadFile = File(..., description="Image of sealing installation")):
+    """Analyze sealing installations for compliance with standards."""
     if not image.content_type or not image.content_type.startswith('image/'):
         raise HTTPException(status_code=400, detail="File must be an image")
-    
-    return await analyze_image(image, VAULT_CONDUIT_PROMPT)
+
+    return await analyze_image(image, SEALING_PROMPT)
+
 
 @app.post("/vault-flooding", response_model=InspectionResponse)
-async def inspect_installation(image: UploadFile = File(..., description="Image of cable installation")):
-    """Analyze cable installation techniques and workmanship."""
+async def inspect_vault_flooding(image: UploadFile = File(..., description="Image of vault flooding prevention installation")):
+    """Analyze vault flooding prevention measures for compliance with standards."""
     if not image.content_type or not image.content_type.startswith('image/'):
         raise HTTPException(status_code=400, detail="File must be an image")
-    
-    return await analyze_image(image, INSTALLATION_PROMPT)
+
+    return await analyze_image(image, VAULT_FLOODING_PROMPT)
+
 
 @app.post("/duct-bend", response_model=InspectionResponse)
 async def inspect_duct_bend(image: UploadFile = File(..., description="Image of duct bend installation")):
     """Analyze duct bend installations for compliance with standards."""
     if not image.content_type or not image.content_type.startswith('image/'):
         raise HTTPException(status_code=400, detail="File must be an image")
-    
-    return await analyze_image(image, DECK_PROMPT)
+
+    return await analyze_image(image, DUCT_BEND_PROMPT)
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
