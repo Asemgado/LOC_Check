@@ -2,8 +2,7 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from google import genai
 from google.genai import types
-import tempfile
-import os
+import tempfile, os, uvicorn
 from typing import List
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -31,17 +30,9 @@ app.add_middleware(
 client = genai.Client()
 
 # Upload PDF knowledge base globally
-pdf_path = "/home/asemgado/github/LOC_Check/VI-Vault-Conduit-Installation-Deck.pdf"
-pdf_knowledge_base = None
 
-if os.path.exists(pdf_path):
-    try:
-        pdf_knowledge_base = client.files.upload(file=pdf_path)
-        print("✅ PDF knowledge base uploaded to Gemini successfully")
-    except Exception as e:
-        print(f"❌ Failed to upload PDF: {e}")
-else:
-    print(f"❌ PDF knowledge base not found at: {pdf_path}")
+pdf_path = os.path.join(os.getcwd(), 'knowledge_base.pdf')
+pdf_knowledge_base = client.files.upload(file=pdf_path)
 
 # Response model
 class InspectionResponse(BaseModel):
@@ -233,5 +224,4 @@ async def inspect_deck(image: UploadFile = File(..., description="Image of deck-
     return await analyze_image(image, DECK_PROMPT)
 
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app)
