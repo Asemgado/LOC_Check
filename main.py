@@ -179,7 +179,7 @@ async def analyze_image(image_file: UploadFile, prompt: str) -> InspectionRespon
             
             # Generate content with prompt, PDF knowledge base, and image
             response = client.models.generate_content(
-                model="gemini-2.0-flash",
+                model="gemini-2.5-flash",
                 contents=[prompt, pdf_knowledge_base, uploaded_image]
             )
 
@@ -203,7 +203,7 @@ async def analyze_image(image_file: UploadFile, prompt: str) -> InspectionRespon
 async def root():
     return {"message": "Welcome to the Inspection API"}
 
-@app.post("/vault-conduit", response_model=InspectionResponse)
+@app.post("/sealing", response_model=InspectionResponse)
 async def inspect_vault_conduit(image: UploadFile = File(..., description="Image of vault or conduit installation")):
     """Analyze vault and conduit installations for compliance with standards."""
     if not image.content_type or not image.content_type.startswith('image/'):
@@ -211,7 +211,7 @@ async def inspect_vault_conduit(image: UploadFile = File(..., description="Image
     
     return await analyze_image(image, VAULT_CONDUIT_PROMPT)
 
-@app.post("/installation", response_model=InspectionResponse)
+@app.post("/vault-flooding", response_model=InspectionResponse)
 async def inspect_installation(image: UploadFile = File(..., description="Image of cable installation")):
     """Analyze cable installation techniques and workmanship."""
     if not image.content_type or not image.content_type.startswith('image/'):
@@ -219,9 +219,9 @@ async def inspect_installation(image: UploadFile = File(..., description="Image 
     
     return await analyze_image(image, INSTALLATION_PROMPT)
 
-@app.post("/deck", response_model=InspectionResponse)
-async def inspect_deck(image: UploadFile = File(..., description="Image of deck-level cable installation")):
-    """Analyze deck and above-ground cable installations."""
+@app.post("/duct-bend", response_model=InspectionResponse)
+async def inspect_duct_bend(image: UploadFile = File(..., description="Image of duct bend installation")):
+    """Analyze duct bend installations for compliance with standards."""
     if not image.content_type or not image.content_type.startswith('image/'):
         raise HTTPException(status_code=400, detail="File must be an image")
     
