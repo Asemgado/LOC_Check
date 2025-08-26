@@ -224,4 +224,4 @@ async def inspect_deck(image: UploadFile = File(..., description="Image of deck-
     return await analyze_image(image, DECK_PROMPT)
 
 if __name__ == "__main__":
-    uvicorn.run(app)
+    uvicorn.run(app, host="0.0.0.0", port=8000)
