@@ -198,6 +198,10 @@ async def analyze_image(image_file: UploadFile, prompt: str) -> InspectionRespon
             recommendations=["Please try again or contact support"],
             confidence_score=0.0
         )
+    
+@app.get("/")
+async def root():
+    return {"message": "Welcome to the Inspection API"}
 
 @app.post("/vault-conduit", response_model=InspectionResponse)
 async def inspect_vault_conduit(image: UploadFile = File(..., description="Image of vault or conduit installation")):
