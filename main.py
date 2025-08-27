@@ -51,14 +51,6 @@ class InspectionResponse(BaseModel):
 SEALING_PROMPT = """
 You are a sealing inspection expert. Analyze the uploaded image for proper sealing installations and compliance against the PDF knowledge base.
 
-Focus on:
-- Seal integrity and material condition
-- Proper sealing compound application
-- Gasket and O-ring positioning
-- Waterproofing effectiveness
-- Joint sealing quality
-- Environmental protection seals
-
 Provide SHORT and SPECIFIC analysis. Keep responses concise and technical.
 
 Format your response as:
@@ -72,14 +64,6 @@ Format your response as:
 VAULT_FLOODING_PROMPT = """
 You are a vault flooding prevention specialist. Analyze the uploaded image for vault flooding risks and protection measures compliance against the PDF knowledge base.
 
-Focus on:
-- Water ingress prevention systems
-- Drainage adequacy and functionality
-- Waterproof sealing around cables
-- Vault floor slope and water management
-- Sump pump installation and operation
-- Emergency water removal provisions
-
 Provide SHORT and SPECIFIC analysis. Keep responses concise and technical.
 
 Format your response as:
@@ -92,14 +76,6 @@ Format your response as:
 
 DUCT_BEND_PROMPT = """
 You are a duct bend installation specialist. Analyze the uploaded image for proper duct bend installations and compliance against the PDF knowledge base.
-
-Focus on:
-- Bend radius adherence to specifications
-- Duct integrity at bend points
-- Proper bend installation techniques
-- Cable pulling tension considerations
-- Joint sealing at bend connections
-- Structural support for bent sections
 
 Provide SHORT and SPECIFIC analysis. Keep responses concise and technical.
 
@@ -174,12 +150,26 @@ def parse_analysis_response(response_text: str) -> InspectionResponse:
         )
 
 
-async def analyze_image(image_file: UploadFile, prompt: str) -> InspectionResponse:
+async def generate_response(image_file: UploadFile, prompt: str, instructions: str) -> InspectionResponse:
     """Analyze image using Gemini with the specified prompt"""
     try:
         if not pdf_knowledge_base:
             raise HTTPException(
                 status_code=500, detail="PDF knowledge base not loaded")
+
+        # if user did not upload an image
+        if not image_file:
+            response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=[prompt, pdf_knowledge_base],
+                config=types.GenerateContentConfig(
+                    system_instruction=instructions
+                )
+            )
+            return response.txt
+
+        if not image_file.content_type or not image_file.content_type.startswith('image/'):
+            raise HTTPException(status_code=400, detail="File must be an image")
 
         # Save uploaded image to temporary file
         with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as temp_file:
@@ -194,7 +184,10 @@ async def analyze_image(image_file: UploadFile, prompt: str) -> InspectionRespon
             # Generate content with prompt, PDF knowledge base, and image
             response = client.models.generate_content(
                 model="gemini-2.5-flash",
-                contents=[prompt, pdf_knowledge_base, uploaded_image]
+                contents=[prompt, pdf_knowledge_base, uploaded_image],
+                config=types.GenerateContentConfig(
+                    system_instruction=instructions
+                )
             )
 
             # Parse and return response
@@ -216,34 +209,28 @@ async def analyze_image(image_file: UploadFile, prompt: str) -> InspectionRespon
 
 @app.get("/")
 async def root():
-    return {"message": "Welcome to the Inspection API"}
+    return {"message": "Welcome to the Inspection API  go to /docs for more information"}
 
 
 @app.post("/sealing", response_model=InspectionResponse)
-async def inspect_sealing(image: UploadFile = File(..., description="Image of sealing installation")):
+async def inspect_sealing(prompt: str, image: UploadFile = File(..., description="Image of sealing installation")):
     """Analyze sealing installations for compliance with standards."""
-    if not image.content_type or not image.content_type.startswith('image/'):
-        raise HTTPException(status_code=400, detail="File must be an image")
 
-    return await analyze_image(image, SEALING_PROMPT)
+    return await generate_response(image, SEALING_PROMPT, prompt)
 
 
 @app.post("/vault-flooding", response_model=InspectionResponse)
-async def inspect_vault_flooding(image: UploadFile = File(..., description="Image of vault flooding prevention installation")):
+async def inspect_vault_flooding(prompt: str, image: UploadFile = File(..., description="Image of vault flooding prevention installation")):
     """Analyze vault flooding prevention measures for compliance with standards."""
-    if not image.content_type or not image.content_type.startswith('image/'):
-        raise HTTPException(status_code=400, detail="File must be an image")
 
-    return await analyze_image(image, VAULT_FLOODING_PROMPT)
+    return await generate_response(image, VAULT_FLOODING_PROMPT, prompt)
 
 
 @app.post("/duct-bend", response_model=InspectionResponse)
-async def inspect_duct_bend(image: UploadFile = File(..., description="Image of duct bend installation")):
+async def inspect_duct_bend(prompt: str, image: UploadFile = File(..., description="Image of duct bend installation")):
     """Analyze duct bend installations for compliance with standards."""
-    if not image.content_type or not image.content_type.startswith('image/'):
-        raise HTTPException(status_code=400, detail="File must be an image")
 
-    return await analyze_image(image, DUCT_BEND_PROMPT)
+    return await generate_response(image, DUCT_BEND_PROMPT, prompt)
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
