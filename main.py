@@ -3,9 +3,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from typing import Optional
 import uvicorn
-from inspection_controller import InspectionController, create_tables
+from inspection_controller import InspectionController, create_tables, create_conversation, get_conversation, ConversationResponse, ConversationWithMessages
 
 # Lifespan manager
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     # Startup
@@ -33,41 +35,60 @@ app.add_middleware(
 # Initialize controller
 controller = InspectionController()
 
+
 @app.get("/")
 async def root():
     return {"message": "Welcome to the Inspection API  go to /docs for more information"}
+
+
+@app.post("/create-conversation", response_model=ConversationResponse)
+async def create_new_conversation(
+    user_id: str = Form(..., description="User ID"),
+    endpoint_name: str = Form(...,
+                              description="Endpoint name (sealing, vault-flooding, duct-bend)")
+):
+    """Create a new conversation for a user and endpoint"""
+    return await create_conversation(user_id, endpoint_name)
+
+
+@app.get("/conversation/{conversation_id}", response_model=ConversationWithMessages)
+async def get_conversation_details(conversation_id: str):
+    """Get conversation details with all messages by conversation ID"""
+    return await get_conversation(conversation_id)
+
 
 @app.post("/sealing")
 async def inspect_sealing(
     prompt: Optional[str] = Form(None, description="Analysis prompt"),
     image: Optional[UploadFile] = File(
-        None, description="image of sealing installation")
+        None, description="image of sealing installation"),
+    conversation_id: Optional[str] = Form(None, description="Conversation ID")
 ):
     """Analyze sealing installations for compliance with standards."""
-    return await controller.inspect_sealing(prompt, image)
-
+    return await controller.inspect_sealing(prompt, image, conversation_id)
 
 
 @app.post("/vault-flooding")
 async def inspect_vault_flooding(
     prompt: Optional[str] = Form(None, description="Analysis prompt"),
     image: Optional[UploadFile] = File(
-        None, description="image of vault flooding prevention installation")
+        None, description="image of vault flooding prevention installation"),
+    conversation_id: Optional[str] = Form(None, description="Conversation ID")
 ):
     """Analyze vault flooding prevention measures for compliance with standards."""
-    return await controller.inspect_vault_flooding(prompt, image)
-
-
+    return await controller.inspect_vault_flooding(prompt, image, conversation_id)
 
 
 @app.post("/duct-bend")
 async def inspect_duct_bend(
     prompt: Optional[str] = Form(None, description="Analysis prompt"),
     image: Optional[UploadFile] = File(
-        None, description="image of duct bend installation")
+        None, description="image of duct bend installation"),
+    conversation_id: Optional[str] = Form(None, description="Conversation ID")
 ):
     """Analyze duct bend installations for compliance with standards."""
-    return await controller.inspect_duct_bend(prompt, image)
+    return await controller.inspect_duct_bend(prompt, image, conversation_id)
+
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)

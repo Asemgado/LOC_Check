@@ -1,12 +1,17 @@
 from google import genai
 from google.genai import types
-import tempfile, os, uuid, requests, base64
+import tempfile
+import os
+import uuid
+import requests
+import base64
+import json
 from typing import List, Optional
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import declarative_base
-from sqlalchemy import Column, String, Text, DateTime, Float
+from sqlalchemy import Column, String, Text, DateTime, Float, ForeignKey, text
 from sqlalchemy.dialects.postgresql import UUID
 from datetime import datetime, timezone
 from fastapi import UploadFile, HTTPException
@@ -30,28 +35,55 @@ firebase_bucket_name = firebase_config["storageBucket"]
 # Database setup
 DATABASE_URL = os.getenv("DATABASE_CONNECTION_STRING")
 if DATABASE_URL and DATABASE_URL.startswith("postgresql://"):
-    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg://")
+    DATABASE_URL = DATABASE_URL.replace(
+        "postgresql://", "postgresql+psycopg://")
 
 engine = create_async_engine(DATABASE_URL or '')
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 Base = declarative_base()
 
-# Database model for storing prompts and responses
-class InspectionLog(Base):
-    __tablename__ = "inspection_logs"
-    
+# Database models
+
+
+class Conversation(Base):
+    __tablename__ = "conversations"
+
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(String(100), nullable=False)
+    endpoint_name = Column(String(50), nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+# Database model for storing prompts and responses
+
+
+class Messages(Base):
+    __tablename__ = "messages"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    conversation_id = Column(UUID(as_uuid=True), ForeignKey(
+        'conversations.id'), nullable=True)
     endpoint = Column(String(50), nullable=False)
     user_prompt = Column(Text)
     model_response = Column(Text, nullable=False)
     verdict = Column(String(20))
     confidence_score = Column(Float)
+    analysis = Column(Text)
+    issues = Column(Text)  # Store as JSON string
+    recommendations = Column(Text)  # Store as JSON string
     image_url = Column(Text)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 # Create tables function
+
+
 async def create_tables():
     async with engine.begin() as conn:
+        # Drop all tables with CASCADE to handle foreign key constraints
+        await conn.execute(text("DROP TABLE IF EXISTS inspection_logs CASCADE"))
+        await conn.execute(text("DROP TABLE IF EXISTS messages CASCADE"))
+        await conn.execute(text("DROP TABLE IF EXISTS conversations CASCADE"))
+
+        # Create all tables
         await conn.run_sync(Base.metadata.create_all)
 
 # Initialize Gemini client globally
@@ -61,7 +93,9 @@ client = genai.Client()
 pdf_path = os.path.join(os.getcwd(), 'knowledge_base.pdf')
 pdf_knowledge_base = None
 
-# Response model
+# Response models
+
+
 class ResponseStructure(BaseModel):
     message: str
     verdict: str
@@ -69,6 +103,36 @@ class ResponseStructure(BaseModel):
     issues: List[str]
     recommendations: List[str]
     confidence_score: float
+
+
+class ConversationResponse(BaseModel):
+    conversation_id: str
+    user_id: str
+    endpoint_name: str
+    created_at: str
+
+
+class MessageResponse(BaseModel):
+    message_id: str
+    endpoint: str
+    user_prompt: str
+    model_response: str
+    verdict: str
+    confidence_score: float
+    analysis: str
+    issues: List[str]
+    recommendations: List[str]
+    image_url: str
+    created_at: str
+
+
+class ConversationWithMessages(BaseModel):
+    conversation_id: str
+    user_id: str
+    endpoint_name: str
+    created_at: str
+    messages: List[MessageResponse]
+
 
 # System prompts for different endpoints
 SEALING_PROMPT = """
@@ -141,6 +205,7 @@ MoreStructure = '''
 **CONFIDENCE:** [Score from 0.0 to 1.0]
 '''
 
+
 def parse_analysis_response(response_text: str) -> ResponseStructure:
     """Parse Gemini response into structured format"""
     try:
@@ -212,32 +277,33 @@ def parse_analysis_response(response_text: str) -> ResponseStructure:
             confidence_score=0.0
         )
 
+
 async def upload_image_to_firebase(image_content: bytes, filename: str) -> str:
     """Upload image to Firebase Storage and return the download URL"""
     try:
         # Create a unique filename with timestamp
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         unique_filename = f"inspection_images/{timestamp}_{filename}"
-        
+
         # Firebase Storage REST API endpoint
         project_id = firebase_config["projectId"]
         api_key = firebase_config["apiKey"]
-        
+
         # Upload URL
         upload_url = f"https://firebasestorage.googleapis.com/v0/b/{firebase_bucket_name}/o?name={unique_filename}"
-        
+
         # Upload the file
         headers = {
             'Content-Type': 'application/octet-stream'
         }
-        
+
         response = requests.post(
             upload_url,
             data=image_content,
             headers=headers,
             params={'key': api_key}
         )
-        
+
         if response.status_code == 200:
             # Get the download URL
             download_url = f"https://firebasestorage.googleapis.com/v0/b/{firebase_bucket_name}/o/{unique_filename}?alt=media"
@@ -246,27 +312,125 @@ async def upload_image_to_firebase(image_content: bytes, filename: str) -> str:
         else:
             print(f"Upload failed with status {response.status_code}: {response.text}")
             return ""
-        
+
     except Exception as e:
         print(f"Error uploading image to Firebase: {str(e)}")
         return ""
 
-async def save_to_database(endpoint: str, user_prompt: str, response: ResponseStructure, image_url: str = ""):
+
+async def create_conversation(user_id: str, endpoint_name: str) -> ConversationResponse:
+    """Create a new conversation and return the conversation details"""
+    try:
+        async with AsyncSessionLocal() as db:
+            conversation = Conversation(
+                user_id=user_id,
+                endpoint_name=endpoint_name
+            )
+            db.add(conversation)
+            await db.commit()
+            await db.refresh(conversation)
+
+            return ConversationResponse(
+                conversation_id=str(conversation.id),
+                user_id=conversation.user_id,
+                endpoint_name=conversation.endpoint_name,
+                created_at=conversation.created_at.isoformat()
+            )
+    except Exception as e:
+        print(f"Error creating conversation: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to create conversation: {str(e)}")
+
+
+async def get_conversation(conversation_id: str) -> ConversationWithMessages:
+    """Get conversation details with all messages by conversation ID"""
+    try:
+        async with AsyncSessionLocal() as db:
+            from sqlalchemy import select
+
+            # Query the conversation by ID
+            stmt = select(Conversation).where(
+                Conversation.id == uuid.UUID(conversation_id))
+            result = await db.execute(stmt)
+            conversation = result.scalar_one_or_none()
+
+            if not conversation:
+                raise HTTPException(
+                    status_code=404, detail="Conversation not found")
+
+            # Query all messages/inspection logs for this conversation
+            messages_stmt = select(Messages).where(
+                Messages.conversation_id == uuid.UUID(conversation_id)
+            ).order_by(Messages.created_at)
+            messages_result = await db.execute(messages_stmt)
+            messages = messages_result.scalars().all()
+
+            # Convert messages to response format
+            message_responses = []
+            for msg in messages:
+                # Parse issues and recommendations from JSON strings
+                try:
+                    issues = json.loads(msg.issues) if msg.issues else []
+                except:
+                    issues = []
+
+                try:
+                    recommendations = json.loads(
+                        msg.recommendations) if msg.recommendations else []
+                except:
+                    recommendations = []
+
+                message_responses.append(MessageResponse(
+                    message_id=str(msg.id),
+                    endpoint=msg.endpoint,
+                    user_prompt=msg.user_prompt or "",
+                    model_response=msg.model_response,
+                    verdict=msg.verdict or "",
+                    confidence_score=msg.confidence_score or 0.0,
+                    analysis=msg.analysis or "",
+                    issues=issues,
+                    recommendations=recommendations,
+                    image_url=msg.image_url or "",
+                    created_at=msg.created_at.isoformat()
+                ))
+
+            return ConversationWithMessages(
+                conversation_id=str(conversation.id),
+                user_id=conversation.user_id,
+                endpoint_name=conversation.endpoint_name,
+                created_at=conversation.created_at.isoformat(),
+                messages=message_responses
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error retrieving conversation: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to retrieve conversation: {str(e)}")
+
+
+async def save_to_database(endpoint: str, user_prompt: str, response: ResponseStructure, image_url: str = "", conversation_id: Optional[str] = None):
     """Save user prompt and model response to database"""
     try:
         async with AsyncSessionLocal() as db:
-            log_entry = InspectionLog(
+            log_entry = Messages(
                 endpoint=endpoint,
+                conversation_id=uuid.UUID(
+                    conversation_id) if conversation_id else None,
                 user_prompt=user_prompt,
                 model_response=response.message,
                 verdict=response.verdict,
                 confidence_score=response.confidence_score,
+                analysis=response.analysis,
+                issues=json.dumps(response.issues),
+                recommendations=json.dumps(response.recommendations),
                 image_url=image_url if image_url else None
             )
             db.add(log_entry)
             await db.commit()
     except Exception as e:
         print(f"Error saving to database: {str(e)}")
+
 
 async def image_response(image_file: UploadFile, instructions: str, prompt: str) -> ResponseStructure:
     """Analyze image using Gemini with the specified prompt"""
@@ -305,7 +469,6 @@ async def image_response(image_file: UploadFile, instructions: str, prompt: str)
                 )
             )
 
-            print(response.text)
             # Parse and return response
             return parse_analysis_response(response.text if response.text else "No response")
 
@@ -322,6 +485,7 @@ async def image_response(image_file: UploadFile, instructions: str, prompt: str)
             recommendations=["Please try again or contact support"],
             confidence_score=0.0
         )
+
 
 async def text_response(prompt: str, instructions: str) -> ResponseStructure:
     try:
@@ -342,7 +506,6 @@ async def text_response(prompt: str, instructions: str) -> ResponseStructure:
             )
         )
 
-        print(response.text)
 
         return parse_analysis_response(response.text if response.text else "No response")
 
@@ -356,56 +519,57 @@ async def text_response(prompt: str, instructions: str) -> ResponseStructure:
             confidence_score=0.0
         )
 
+
 class InspectionController:
     """Main controller class for handling inspection operations"""
-    
-    async def inspect_sealing(self, prompt: Optional[str], image: Optional[UploadFile]) -> ResponseStructure:
+
+    async def inspect_sealing(self, prompt: Optional[str], image: Optional[UploadFile], conversation_id: Optional[str] = None) -> ResponseStructure:
         """Analyze sealing installations for compliance with standards."""
         if not image:
             response = await text_response(prompt, SEALING_PROMPT)
-            await save_to_database("sealing", prompt or "", response)
+            await save_to_database("sealing", prompt or "", response, "", conversation_id)
             return response
-        
+
         # Upload image to Firebase
         image_content = await image.read()
         image_url = await upload_image_to_firebase(image_content, image.filename or "image.jpg")
-        
+
         # Reset file pointer for analysis
         await image.seek(0)
         response = await image_response(image, SEALING_PROMPT, prompt)
-        await save_to_database("sealing", prompt or "", response, image_url)
+        await save_to_database("sealing", prompt or "", response, image_url, conversation_id)
         return response
 
-    async def inspect_vault_flooding(self, prompt: Optional[str], image: Optional[UploadFile]) -> ResponseStructure:
+    async def inspect_vault_flooding(self, prompt: Optional[str], image: Optional[UploadFile], conversation_id: Optional[str] = None) -> ResponseStructure:
         """Analyze vault flooding prevention measures for compliance with standards."""
         if not image:
             response = await text_response(prompt, VAULT_FLOODING_PROMPT)
-            await save_to_database("vault-flooding", prompt or "", response)
+            await save_to_database("vault-flooding", prompt or "", response, "", conversation_id)
             return response
-        
+
         # Upload image to Firebase
         image_content = await image.read()
         image_url = await upload_image_to_firebase(image_content, image.filename or "image.jpg")
-        
+
         # Reset file pointer for analysis
         await image.seek(0)
         response = await image_response(image, VAULT_FLOODING_PROMPT, prompt)
-        await save_to_database("vault-flooding", prompt or "", response, image_url)
+        await save_to_database("vault-flooding", prompt or "", response, image_url, conversation_id)
         return response
 
-    async def inspect_duct_bend(self, prompt: Optional[str], image: Optional[UploadFile]) -> ResponseStructure:
+    async def inspect_duct_bend(self, prompt: Optional[str], image: Optional[UploadFile], conversation_id: Optional[str] = None) -> ResponseStructure:
         """Analyze duct bend installations for compliance with standards."""
         if not image:
             response = await text_response(prompt, DUCT_BEND_PROMPT)
-            await save_to_database("duct-bend", prompt or "", response)
+            await save_to_database("duct-bend", prompt or "", response, "", conversation_id)
             return response
-        
+
         # Upload image to Firebase
         image_content = await image.read()
         image_url = await upload_image_to_firebase(image_content, image.filename or "image.jpg")
-        
+
         # Reset file pointer for analysis
         await image.seek(0)
         response = await image_response(image, DUCT_BEND_PROMPT, prompt)
-        await save_to_database("duct-bend", prompt or "", response, image_url)
+        await save_to_database("duct-bend", prompt or "", response, image_url, conversation_id)
         return response
