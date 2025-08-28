@@ -1,4 +1,6 @@
-import os, uuid, json
+import os
+import uuid
+import json
 from typing import List, Optional
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -89,11 +91,28 @@ class UserLogs(Base):
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
+class Appeals(Base):
+    __tablename__ = "appeals"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    message_id = Column(UUID(as_uuid=True), ForeignKey(
+        'messages.id'), nullable=False)
+    user_id = Column(String(100), nullable=False)
+    appeal_reason = Column(Text, nullable=False)
+    supporting_image_url = Column(Text, nullable=True)
+    # pending, reviewed, approved, rejected
+    status = Column(String(20), default="pending")
+    reviewer_notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
 # Create tables function
 async def create_tables():
     async with engine.begin() as conn:
         # Drop all tables with CASCADE to handle foreign key constraints
         await conn.execute(text("DROP TABLE IF EXISTS inspection_logs CASCADE"))
+        await conn.execute(text("DROP TABLE IF EXISTS appeals CASCADE"))
         await conn.execute(text("DROP TABLE IF EXISTS user_logs CASCADE"))
         await conn.execute(text("DROP TABLE IF EXISTS messages CASCADE"))
         await conn.execute(text("DROP TABLE IF EXISTS conversations CASCADE"))
@@ -172,3 +191,22 @@ class ValidationLedgerResponse(BaseModel):
     conversation_id: str
     total_photos: int
     photos: List[ValidationLedgerItem]
+
+
+# Appeal Response Models
+class AppealResponse(BaseModel):
+    appeal_id: str
+    message_id: str
+    user_id: str
+    appeal_reason: str
+    supporting_image_url: Optional[str]
+    status: str
+    reviewer_notes: Optional[str]
+    created_at: str
+    updated_at: str
+
+
+class AppealSubmissionResponse(BaseModel):
+    appeal_id: str
+    message: str
+    status: str

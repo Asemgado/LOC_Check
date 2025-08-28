@@ -13,9 +13,9 @@ from sqlalchemy import select
 
 # Import from models
 from models import (
-    AsyncSessionLocal, Conversation, Messages, UserLogs, firebase_config, firebase_bucket_name,
+    AsyncSessionLocal, Conversation, Messages, UserLogs, Appeals, firebase_config, firebase_bucket_name,
     ResponseStructure, ConversationResponse, MessageResponse, ConversationWithMessages, UserLogResponse,
-    ValidationLedgerResponse, ValidationLedgerItem
+    ValidationLedgerResponse, ValidationLedgerItem, AppealResponse, AppealSubmissionResponse
 )
 
 # Initialize Gemini client globally
@@ -376,6 +376,90 @@ async def get_validation_ledger(conversation_id: str):
         print(f"Error retrieving validation ledger: {str(e)}")
         raise HTTPException(
             status_code=500, detail=f"Failed to retrieve validation ledger: {str(e)}")
+
+
+async def submit_appeal(message_id: str, user_id: str, appeal_reason: str, supporting_image: Optional[UploadFile] = None) -> AppealSubmissionResponse:
+    """Submit an appeal for a specific message with optional supporting image"""
+    try:
+        async with AsyncSessionLocal() as db:
+            # First verify the message exists and belongs to the user
+            message_stmt = select(Messages).where(
+                Messages.id == uuid.UUID(message_id))
+            message_result = await db.execute(message_stmt)
+            message = message_result.scalar_one_or_none()
+
+            if not message:
+                raise HTTPException(
+                    status_code=404, detail="Message not found")
+
+            # Get conversation to verify user ownership
+            conversation_stmt = select(Conversation).where(
+                Conversation.id == message.conversation_id)
+            conversation_result = await db.execute(conversation_stmt)
+            conversation = conversation_result.scalar_one_or_none()
+
+            if not conversation or conversation.user_id != user_id:
+                raise HTTPException(
+                    status_code=403, detail="You can only appeal your own messages")
+
+            supporting_image_url = None
+
+            # Handle supporting image upload if provided
+            if supporting_image and supporting_image.filename:
+                try:
+                    import firebase_admin
+                    from firebase_admin import credentials, storage
+
+                    # Initialize Firebase if not already done
+                    if not firebase_admin._apps:
+                        # Use service account key or default credentials
+                        firebase_admin.initialize_app()
+
+                    # Upload image to Firebase Storage
+                    bucket = storage.bucket(firebase_bucket_name)
+                    blob_name = f"appeals/{uuid.uuid4()}_{supporting_image.filename}"
+                    blob = bucket.blob(blob_name)
+
+                    # Read and upload file content
+                    file_content = await supporting_image.read()
+                    blob.upload_from_string(
+                        file_content, content_type=supporting_image.content_type)
+
+                    # Make the blob public and get URL
+                    blob.make_public()
+                    supporting_image_url = blob.public_url
+
+                except Exception as upload_error:
+                    print(
+                        f"Error uploading supporting image: {str(upload_error)}")
+                    # Continue without the image rather than failing the entire appeal
+                    supporting_image_url = None
+
+            # Create the appeal
+            appeal = Appeals(
+                message_id=uuid.UUID(message_id),
+                user_id=user_id,
+                appeal_reason=appeal_reason,
+                supporting_image_url=supporting_image_url,
+                status="pending"
+            )
+
+            db.add(appeal)
+            await db.commit()
+            await db.refresh(appeal)
+
+            return AppealSubmissionResponse(
+                appeal_id=str(appeal.id),
+                message="Appeal submitted successfully",
+                status="pending"
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error submitting appeal: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to submit appeal: {str(e)}")
 
 
 async def create_conversation(user_id: str, endpoint_name: str) -> ConversationResponse:

@@ -3,8 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from typing import Optional, List
 import uvicorn
-from controller import InspectionController, create_conversation, get_conversation, get_message, get_user_logs, get_user_conversations, get_all_logs, get_validation_ledger
-from models import create_tables, ConversationResponse, ConversationWithMessages, MessageResponse, UserLogResponse, ValidationLedgerResponse
+from controller import InspectionController, create_conversation, get_conversation, get_message, get_user_logs, get_user_conversations, get_all_logs, get_validation_ledger, submit_appeal
+from models import create_tables, ConversationResponse, ConversationWithMessages, MessageResponse, UserLogResponse, ValidationLedgerResponse, AppealSubmissionResponse
 
 # Lifespan manager
 import uvicorn
@@ -101,6 +101,18 @@ async def get_all_logs_endpoint(limit: int = 100, offset: int = 0):
 async def get_validation_ledger_endpoint(conversation_id: str):
     """Get validation ledger - all photos in a conversation with their status, confidence, and date"""
     return await get_validation_ledger(conversation_id)
+
+
+@app.post("/appeal", response_model=AppealSubmissionResponse, tags=["Appeals"])
+async def submit_appeal_endpoint(
+    message_id: str = Form(..., description="Message ID to appeal"),
+    user_id: str = Form(..., description="User ID submitting the appeal"),
+    appeal_reason: str = Form(..., description="Reason for the appeal"),
+    supporting_image: Optional[UploadFile] = File(
+        None, description="Optional supporting image for the appeal")
+):
+    """Submit an appeal for a specific message with optional supporting image"""
+    return await submit_appeal(message_id, user_id, appeal_reason, supporting_image)
 
 
 @app.post("/sealing", tags=["Inspections"])
