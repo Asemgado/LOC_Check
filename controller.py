@@ -7,84 +7,15 @@ import requests
 import base64
 import json
 from typing import List, Optional
-from pydantic import BaseModel
-from dotenv import load_dotenv
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
-from sqlalchemy.orm import declarative_base
-from sqlalchemy import Column, String, Text, DateTime, Float, ForeignKey, text
-from sqlalchemy.dialects.postgresql import UUID
-from datetime import datetime, timezone
 from fastapi import UploadFile, HTTPException
+from datetime import datetime, timezone
+from sqlalchemy import select
 
-# Load environment variables
-load_dotenv()
-
-# Firebase setup
-firebase_config = {
-    "apiKey": os.getenv("VITE_FIREBASE_apiKey", "").strip('"'),
-    "authDomain": os.getenv("VITE_FIREBASE_authDomain", "").strip('"'),
-    "projectId": os.getenv("VITE_FIREBASE_projectId", "").strip('"'),
-    "storageBucket": os.getenv("VITE_FIREBASE_storageBucket", "").strip('"'),
-    "messagingSenderId": os.getenv("VITE_FIREBASE_messagingSenderId", "").strip('"'),
-    "appId": os.getenv("VITE_FIREBASE_appId", "").strip('"'),
-    "measurementId": os.getenv("VITE_FIREBASE_measurementId", "").strip('"')
-}
-
-firebase_bucket_name = firebase_config["storageBucket"]
-
-# Database setup
-DATABASE_URL = os.getenv("DATABASE_CONNECTION_STRING")
-if DATABASE_URL and DATABASE_URL.startswith("postgresql://"):
-    DATABASE_URL = DATABASE_URL.replace(
-        "postgresql://", "postgresql+psycopg://")
-
-engine = create_async_engine(DATABASE_URL or '')
-AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
-Base = declarative_base()
-
-# Database models
-
-
-class Conversation(Base):
-    __tablename__ = "conversations"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(String(100), nullable=False)
-    endpoint_name = Column(String(50), nullable=False)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-
-# Database model for storing prompts and responses
-
-
-class Messages(Base):
-    __tablename__ = "messages"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    conversation_id = Column(UUID(as_uuid=True), ForeignKey(
-        'conversations.id'), nullable=True)
-    endpoint = Column(String(50), nullable=False)
-    user_prompt = Column(Text)
-    model_response = Column(Text, nullable=False)
-    verdict = Column(String(20))
-    confidence_score = Column(Float)
-    analysis = Column(Text)
-    issues = Column(Text)  # Store as JSON string
-    recommendations = Column(Text)  # Store as JSON string
-    image_url = Column(Text)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-
-# Create tables function
-
-
-async def create_tables():
-    async with engine.begin() as conn:
-        # Drop all tables with CASCADE to handle foreign key constraints
-        await conn.execute(text("DROP TABLE IF EXISTS inspection_logs CASCADE"))
-        await conn.execute(text("DROP TABLE IF EXISTS messages CASCADE"))
-        await conn.execute(text("DROP TABLE IF EXISTS conversations CASCADE"))
-
-        # Create all tables
-        await conn.run_sync(Base.metadata.create_all)
+# Import from models
+from models import (
+    AsyncSessionLocal, Conversation, Messages, UserLogs, firebase_config, firebase_bucket_name,
+    ResponseStructure, ConversationResponse, MessageResponse, ConversationWithMessages, UserLogResponse
+)
 
 # Initialize Gemini client globally
 client = genai.Client()
@@ -92,47 +23,6 @@ client = genai.Client()
 # PDF path (will be uploaded when needed)
 pdf_path = os.path.join(os.getcwd(), 'knowledge_base.pdf')
 pdf_knowledge_base = None
-
-# Response models
-
-
-class ResponseStructure(BaseModel):
-    message: str
-    verdict: str
-    analysis: str
-    issues: List[str]
-    recommendations: List[str]
-    confidence_score: float
-
-
-class ConversationResponse(BaseModel):
-    conversation_id: str
-    user_id: str
-    endpoint_name: str
-    created_at: str
-
-
-class MessageResponse(BaseModel):
-    message_id: str
-    endpoint: str
-    user_prompt: str
-    model_response: str
-    verdict: str
-    confidence_score: float
-    analysis: str
-    issues: List[str]
-    recommendations: List[str]
-    image_url: str
-    created_at: str
-
-
-class ConversationWithMessages(BaseModel):
-    conversation_id: str
-    user_id: str
-    endpoint_name: str
-    created_at: str
-    messages: List[str]  # Array of message IDs only
-
 
 # System prompts for different endpoints
 SEALING_PROMPT = """
@@ -319,8 +209,88 @@ async def upload_image_to_firebase(image_content: bytes, filename: str) -> str:
         return ""
 
 
+async def log_user_action(
+    user_id: str,
+    action: str,
+    endpoint: Optional[str] = None,
+    conversation_id: Optional[str] = None,
+    message_id: Optional[str] = None,
+    request_data: Optional[dict] = None,
+    response_data: Optional[dict] = None,
+    status: str = "SUCCESS",
+    error_message: Optional[str] = None,
+    ip_address: Optional[str] = None,
+    user_agent: Optional[str] = None,
+    duration_ms: Optional[float] = None
+):
+    """Log user action in the system"""
+    try:
+        async with AsyncSessionLocal() as db:
+            log_entry = UserLogs(
+                user_id=user_id,
+                action=action,
+                endpoint=endpoint,
+                conversation_id=uuid.UUID(
+                    conversation_id) if conversation_id else None,
+                message_id=uuid.UUID(message_id) if message_id else None,
+                request_data=json.dumps(
+                    request_data) if request_data else None,
+                response_data=json.dumps(
+                    response_data) if response_data else None,
+                status=status,
+                error_message=error_message,
+                ip_address=ip_address,
+                user_agent=user_agent,
+                duration_ms=duration_ms
+            )
+            db.add(log_entry)
+            await db.commit()
+    except Exception as e:
+        print(f"Error logging user action: {str(e)}")
+
+
+async def get_user_logs(user_id: str, limit: int = 100) -> List[UserLogResponse]:
+    """Get user logs by user ID"""
+    try:
+        async with AsyncSessionLocal() as db:
+            # Query user logs by user ID
+            stmt = select(UserLogs).where(
+                UserLogs.user_id == user_id
+            ).order_by(UserLogs.created_at.desc()).limit(limit)
+            result = await db.execute(stmt)
+            logs = result.scalars().all()
+
+            # Convert logs to response format
+            log_responses = []
+            for log in logs:
+                log_responses.append(UserLogResponse(
+                    log_id=str(log.id),
+                    user_id=log.user_id,
+                    action=log.action,
+                    endpoint=log.endpoint or "",
+                    conversation_id=str(
+                        log.conversation_id) if log.conversation_id else None,
+                    message_id=str(log.message_id) if log.message_id else None,
+                    request_data=log.request_data,
+                    response_data=log.response_data,
+                    status=log.status,
+                    error_message=log.error_message,
+                    ip_address=log.ip_address,
+                    user_agent=log.user_agent,
+                    duration_ms=log.duration_ms,
+                    created_at=log.created_at.isoformat()
+                ))
+
+            return log_responses
+    except Exception as e:
+        print(f"Error retrieving user logs: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to retrieve user logs: {str(e)}")
+
+
 async def create_conversation(user_id: str, endpoint_name: str) -> ConversationResponse:
     """Create a new conversation and return the conversation details"""
+    start_time = datetime.now(timezone.utc)
     try:
         async with AsyncSessionLocal() as db:
             conversation = Conversation(
@@ -331,13 +301,42 @@ async def create_conversation(user_id: str, endpoint_name: str) -> ConversationR
             await db.commit()
             await db.refresh(conversation)
 
-            return ConversationResponse(
+            response = ConversationResponse(
                 conversation_id=str(conversation.id),
                 user_id=conversation.user_id,
                 endpoint_name=conversation.endpoint_name,
                 created_at=conversation.created_at.isoformat()
             )
+
+            # Log the action
+            duration = (datetime.now(timezone.utc) -
+                        start_time).total_seconds() * 1000
+            await log_user_action(
+                user_id=user_id,
+                action="create_conversation",
+                endpoint="/create-conversation",
+                conversation_id=str(conversation.id),
+                request_data={"user_id": user_id,
+                              "endpoint_name": endpoint_name},
+                response_data={"conversation_id": str(conversation.id)},
+                status="SUCCESS",
+                duration_ms=duration
+            )
+
+            return response
     except Exception as e:
+        # Log the error
+        duration = (datetime.now(timezone.utc) -
+                    start_time).total_seconds() * 1000
+        await log_user_action(
+            user_id=user_id,
+            action="create_conversation",
+            endpoint="/create-conversation",
+            request_data={"user_id": user_id, "endpoint_name": endpoint_name},
+            status="ERROR",
+            error_message=str(e),
+            duration_ms=duration
+        )
         print(f"Error creating conversation: {str(e)}")
         raise HTTPException(
             status_code=500, detail=f"Failed to create conversation: {str(e)}")
@@ -347,8 +346,6 @@ async def get_conversation(conversation_id: str) -> ConversationWithMessages:
     """Get conversation details with all messages by conversation ID"""
     try:
         async with AsyncSessionLocal() as db:
-            from sqlalchemy import select
-
             # Query the conversation by ID
             stmt = select(Conversation).where(
                 Conversation.id == uuid.UUID(conversation_id))
@@ -359,7 +356,7 @@ async def get_conversation(conversation_id: str) -> ConversationWithMessages:
                 raise HTTPException(
                     status_code=404, detail="Conversation not found")
 
-            # Query all messages/inspection logs for this conversation
+            # Query all messages for this conversation
             messages_stmt = select(Messages).where(
                 Messages.conversation_id == uuid.UUID(conversation_id)
             ).order_by(Messages.created_at)
@@ -386,12 +383,38 @@ async def get_conversation(conversation_id: str) -> ConversationWithMessages:
             status_code=500, detail=f"Failed to retrieve conversation: {str(e)}")
 
 
+async def get_user_conversations(user_id: str) -> List[ConversationResponse]:
+    """Get all conversations for a specific user"""
+    try:
+        async with AsyncSessionLocal() as db:
+            # Query all conversations for the user
+            stmt = select(Conversation).where(
+                Conversation.user_id == user_id
+            ).order_by(Conversation.created_at.desc())
+            result = await db.execute(stmt)
+            conversations = result.scalars().all()
+
+            # Convert to response format
+            conversation_responses = []
+            for conv in conversations:
+                conversation_responses.append(ConversationResponse(
+                    conversation_id=str(conv.id),
+                    user_id=conv.user_id,
+                    endpoint_name=conv.endpoint_name,
+                    created_at=conv.created_at.isoformat()
+                ))
+
+            return conversation_responses
+    except Exception as e:
+        print(f"Error retrieving user conversations: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to retrieve user conversations: {str(e)}")
+
+
 async def get_message(message_id: str) -> MessageResponse:
     """Get message details by message ID"""
     try:
         async with AsyncSessionLocal() as db:
-            from sqlalchemy import select
-
             # Query the message by ID
             stmt = select(Messages).where(
                 Messages.id == uuid.UUID(message_id))
@@ -474,6 +497,7 @@ async def image_response(image_file: UploadFile, instructions: str, prompt: str)
         if not image_file.content_type or not image_file.content_type.startswith('image/'):
             raise HTTPException(
                 status_code=400, detail="File must be an image")
+
         # Save uploaded image to temporary file
         with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as temp_file:
             content = await image_file.read()
@@ -551,7 +575,7 @@ class InspectionController:
     async def inspect_sealing(self, prompt: Optional[str], image: Optional[UploadFile], conversation_id: Optional[str] = None) -> ResponseStructure:
         """Analyze sealing installations for compliance with standards."""
         if not image:
-            response = await text_response(prompt, SEALING_PROMPT)
+            response = await text_response(prompt or "", SEALING_PROMPT)
             await save_to_database("sealing", prompt or "", response, "", conversation_id)
             return response
 
@@ -561,14 +585,14 @@ class InspectionController:
 
         # Reset file pointer for analysis
         await image.seek(0)
-        response = await image_response(image, SEALING_PROMPT, prompt)
+        response = await image_response(image, SEALING_PROMPT, prompt or "")
         await save_to_database("sealing", prompt or "", response, image_url, conversation_id)
         return response
 
     async def inspect_vault_flooding(self, prompt: Optional[str], image: Optional[UploadFile], conversation_id: Optional[str] = None) -> ResponseStructure:
         """Analyze vault flooding prevention measures for compliance with standards."""
         if not image:
-            response = await text_response(prompt, VAULT_FLOODING_PROMPT)
+            response = await text_response(prompt or "", VAULT_FLOODING_PROMPT)
             await save_to_database("vault-flooding", prompt or "", response, "", conversation_id)
             return response
 
@@ -578,14 +602,14 @@ class InspectionController:
 
         # Reset file pointer for analysis
         await image.seek(0)
-        response = await image_response(image, VAULT_FLOODING_PROMPT, prompt)
+        response = await image_response(image, VAULT_FLOODING_PROMPT, prompt or "")
         await save_to_database("vault-flooding", prompt or "", response, image_url, conversation_id)
         return response
 
     async def inspect_duct_bend(self, prompt: Optional[str], image: Optional[UploadFile], conversation_id: Optional[str] = None) -> ResponseStructure:
         """Analyze duct bend installations for compliance with standards."""
         if not image:
-            response = await text_response(prompt, DUCT_BEND_PROMPT)
+            response = await text_response(prompt or "", DUCT_BEND_PROMPT)
             await save_to_database("duct-bend", prompt or "", response, "", conversation_id)
             return response
 
@@ -595,6 +619,6 @@ class InspectionController:
 
         # Reset file pointer for analysis
         await image.seek(0)
-        response = await image_response(image, DUCT_BEND_PROMPT, prompt)
+        response = await image_response(image, DUCT_BEND_PROMPT, prompt or "")
         await save_to_database("duct-bend", prompt or "", response, image_url, conversation_id)
         return response

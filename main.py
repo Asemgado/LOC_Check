@@ -1,9 +1,15 @@
 from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import Optional, List
 import uvicorn
-from inspection_controller import InspectionController, create_tables, create_conversation, get_conversation, get_message, ConversationResponse, ConversationWithMessages, MessageResponse
+from controller import InspectionController, create_conversation, get_conversation, get_message, get_user_logs, get_user_conversations
+from models import create_tables, ConversationResponse, ConversationWithMessages, MessageResponse, UserLogResponse
+
+# Lifespan manager
+import uvicorn
+from controller import InspectionController, create_conversation, get_conversation, get_message
+from models import create_tables, ConversationResponse, ConversationWithMessages, MessageResponse
 
 # Lifespan manager
 
@@ -18,8 +24,17 @@ async def lifespan(_: FastAPI):
 # Initialize FastAPI app
 app = FastAPI(
     title="Cable Inspection API",
-    description="AI-powered cable inspection API with Vault & Conduit, Installation, and Deck endpoints",
+    description="AI-powered cable inspection API for analyzing cable installations, including sealing, vault flooding, and duct bends.",
     version="1.0.0",
+    contact={
+        "name": "Support Team",
+        "url": "https://example.com/support",
+        "email": "support@example.com"
+    },
+    license_info={
+        "name": "MIT License",
+        "url": "https://opensource.org/licenses/MIT"
+    },
     lifespan=lifespan
 )
 
@@ -36,12 +51,13 @@ app.add_middleware(
 controller = InspectionController()
 
 
-@app.get("/")
+# Add tags to group endpoints logically
+@app.get("/", tags=["General"])
 async def root():
-    return {"message": "Welcome to the Inspection API  go to /docs for more information"}
+    return {"message": "Welcome to the Inspection API. Visit /docs for more information."}
 
 
-@app.post("/create-conversation", response_model=ConversationResponse)
+@app.post("/create-conversation", response_model=ConversationResponse, tags=["Conversations"])
 async def create_new_conversation(
     user_id: str = Form(..., description="User ID"),
     endpoint_name: str = Form(...,
@@ -51,45 +67,57 @@ async def create_new_conversation(
     return await create_conversation(user_id, endpoint_name)
 
 
-@app.get("/conversation/{conversation_id}", response_model=ConversationWithMessages)
+@app.get("/conversation/{conversation_id}", response_model=ConversationWithMessages, tags=["Conversations"])
 async def get_conversation_details(conversation_id: str):
     """Get conversation details with all messages by conversation ID"""
     return await get_conversation(conversation_id)
 
 
-@app.get("/message/{message_id}", response_model=MessageResponse)
+@app.get("/user/{user_id}/conversations", response_model=List[ConversationResponse], tags=["Conversations"])
+async def get_user_conversations_endpoint(user_id: str):
+    """Get all conversations for a specific user"""
+    return await get_user_conversations(user_id)
+
+
+@app.get("/message/{message_id}", response_model=MessageResponse, tags=["Messages"])
 async def get_message_details(message_id: str):
     """Get message details by message ID"""
     return await get_message(message_id)
 
 
-@app.post("/sealing")
+@app.get("/logs/{user_id}", response_model=List[UserLogResponse], tags=["Logs"])
+async def get_user_logs_endpoint(user_id: str, limit: int = 100):
+    """Get user activity logs by user ID"""
+    return await get_user_logs(user_id, limit)
+
+
+@app.post("/sealing", tags=["Inspections"])
 async def inspect_sealing(
     prompt: Optional[str] = Form(None, description="Analysis prompt"),
     image: Optional[UploadFile] = File(
-        None, description="image of sealing installation"),
+        None, description="Image of sealing installation"),
     conversation_id: Optional[str] = Form(None, description="Conversation ID")
 ):
     """Analyze sealing installations for compliance with standards."""
     return await controller.inspect_sealing(prompt, image, conversation_id)
 
 
-@app.post("/vault-flooding")
+@app.post("/vault-flooding", tags=["Inspections"])
 async def inspect_vault_flooding(
     prompt: Optional[str] = Form(None, description="Analysis prompt"),
     image: Optional[UploadFile] = File(
-        None, description="image of vault flooding prevention installation"),
+        None, description="Image of vault flooding prevention installation"),
     conversation_id: Optional[str] = Form(None, description="Conversation ID")
 ):
     """Analyze vault flooding prevention measures for compliance with standards."""
     return await controller.inspect_vault_flooding(prompt, image, conversation_id)
 
 
-@app.post("/duct-bend")
+@app.post("/duct-bend", tags=["Inspections"])
 async def inspect_duct_bend(
     prompt: Optional[str] = Form(None, description="Analysis prompt"),
     image: Optional[UploadFile] = File(
-        None, description="image of duct bend installation"),
+        None, description="Image of duct bend installation"),
     conversation_id: Optional[str] = Form(None, description="Conversation ID")
 ):
     """Analyze duct bend installations for compliance with standards."""
