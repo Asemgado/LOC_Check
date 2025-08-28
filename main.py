@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from typing import Optional, List
 import uvicorn
-from controller import InspectionController, create_conversation, get_conversation, get_message, get_user_logs, get_user_conversations
+from controller import InspectionController, create_conversation, get_conversation, get_message, get_user_logs, get_user_conversations, get_all_logs
 from models import create_tables, ConversationResponse, ConversationWithMessages, MessageResponse, UserLogResponse
 
 # Lifespan manager
@@ -89,6 +89,12 @@ async def get_message_details(message_id: str):
 async def get_user_logs_endpoint(user_id: str, limit: int = 100):
     """Get user activity logs by user ID"""
     return await get_user_logs(user_id, limit)
+
+
+@app.get("/logs", response_model=List[UserLogResponse], tags=["Logs"])
+async def get_all_logs_endpoint(limit: int = 100, offset: int = 0):
+    """Get all system logs with pagination"""
+    return await get_all_logs(limit, offset)
 
 
 @app.post("/sealing", tags=["Inspections"])

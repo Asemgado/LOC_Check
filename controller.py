@@ -288,6 +288,45 @@ async def get_user_logs(user_id: str, limit: int = 100) -> List[UserLogResponse]
             status_code=500, detail=f"Failed to retrieve user logs: {str(e)}")
 
 
+async def get_all_logs(limit: int = 100, offset: int = 0) -> List[UserLogResponse]:
+    """Get all logs from the system with pagination"""
+    try:
+        async with AsyncSessionLocal() as db:
+            # Query all logs with pagination
+            stmt = select(UserLogs).order_by(
+                UserLogs.created_at.desc()
+            ).limit(limit).offset(offset)
+            result = await db.execute(stmt)
+            logs = result.scalars().all()
+
+            # Convert logs to response format
+            log_responses = []
+            for log in logs:
+                log_responses.append(UserLogResponse(
+                    log_id=str(log.id),
+                    user_id=log.user_id,
+                    action=log.action,
+                    endpoint=log.endpoint or "",
+                    conversation_id=str(
+                        log.conversation_id) if log.conversation_id else None,
+                    message_id=str(log.message_id) if log.message_id else None,
+                    request_data=log.request_data,
+                    response_data=log.response_data,
+                    status=log.status,
+                    error_message=log.error_message,
+                    ip_address=log.ip_address,
+                    user_agent=log.user_agent,
+                    duration_ms=log.duration_ms,
+                    created_at=log.created_at.isoformat()
+                ))
+
+            return log_responses
+    except Exception as e:
+        print(f"Error retrieving all logs: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to retrieve all logs: {str(e)}")
+
+
 async def create_conversation(user_id: str, endpoint_name: str) -> ConversationResponse:
     """Create a new conversation and return the conversation details"""
     start_time = datetime.now(timezone.utc)
