@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from typing import Optional
 import uvicorn
-from inspection_controller import InspectionController, create_tables, create_conversation, get_conversation, ConversationResponse, ConversationWithMessages
+from inspection_controller import InspectionController, create_tables, create_conversation, get_conversation, get_message, ConversationResponse, ConversationWithMessages, MessageResponse
 
 # Lifespan manager
 
@@ -55,6 +55,12 @@ async def create_new_conversation(
 async def get_conversation_details(conversation_id: str):
     """Get conversation details with all messages by conversation ID"""
     return await get_conversation(conversation_id)
+
+
+@app.get("/message/{message_id}", response_model=MessageResponse)
+async def get_message_details(message_id: str):
+    """Get message details by message ID"""
+    return await get_message(message_id)
 
 
 @app.post("/sealing")

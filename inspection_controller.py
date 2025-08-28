@@ -131,7 +131,7 @@ class ConversationWithMessages(BaseModel):
     user_id: str
     endpoint_name: str
     created_at: str
-    messages: List[MessageResponse]
+    messages: List[str]  # Array of message IDs only
 
 
 # System prompts for different endpoints
@@ -310,7 +310,8 @@ async def upload_image_to_firebase(image_content: bytes, filename: str) -> str:
             print(f"Image uploaded successfully: {unique_filename}")
             return download_url
         else:
-            print(f"Upload failed with status {response.status_code}: {response.text}")
+            print(
+                f"Upload failed with status {response.status_code}: {response.text}")
             return ""
 
     except Exception as e:
@@ -365,41 +366,17 @@ async def get_conversation(conversation_id: str) -> ConversationWithMessages:
             messages_result = await db.execute(messages_stmt)
             messages = messages_result.scalars().all()
 
-            # Convert messages to response format
-            message_responses = []
+            # Convert messages to message IDs only
+            message_ids = []
             for msg in messages:
-                # Parse issues and recommendations from JSON strings
-                try:
-                    issues = json.loads(msg.issues) if msg.issues else []
-                except:
-                    issues = []
-
-                try:
-                    recommendations = json.loads(
-                        msg.recommendations) if msg.recommendations else []
-                except:
-                    recommendations = []
-
-                message_responses.append(MessageResponse(
-                    message_id=str(msg.id),
-                    endpoint=msg.endpoint,
-                    user_prompt=msg.user_prompt or "",
-                    model_response=msg.model_response,
-                    verdict=msg.verdict or "",
-                    confidence_score=msg.confidence_score or 0.0,
-                    analysis=msg.analysis or "",
-                    issues=issues,
-                    recommendations=recommendations,
-                    image_url=msg.image_url or "",
-                    created_at=msg.created_at.isoformat()
-                ))
+                message_ids.append(str(msg.id))
 
             return ConversationWithMessages(
                 conversation_id=str(conversation.id),
                 user_id=conversation.user_id,
                 endpoint_name=conversation.endpoint_name,
                 created_at=conversation.created_at.isoformat(),
-                messages=message_responses
+                messages=message_ids
             )
     except HTTPException:
         raise
@@ -407,6 +384,55 @@ async def get_conversation(conversation_id: str) -> ConversationWithMessages:
         print(f"Error retrieving conversation: {str(e)}")
         raise HTTPException(
             status_code=500, detail=f"Failed to retrieve conversation: {str(e)}")
+
+
+async def get_message(message_id: str) -> MessageResponse:
+    """Get message details by message ID"""
+    try:
+        async with AsyncSessionLocal() as db:
+            from sqlalchemy import select
+
+            # Query the message by ID
+            stmt = select(Messages).where(
+                Messages.id == uuid.UUID(message_id))
+            result = await db.execute(stmt)
+            message = result.scalar_one_or_none()
+
+            if not message:
+                raise HTTPException(
+                    status_code=404, detail="Message not found")
+
+            # Parse issues and recommendations from JSON strings
+            try:
+                issues = json.loads(message.issues) if message.issues else []
+            except:
+                issues = []
+
+            try:
+                recommendations = json.loads(
+                    message.recommendations) if message.recommendations else []
+            except:
+                recommendations = []
+
+            return MessageResponse(
+                message_id=str(message.id),
+                endpoint=message.endpoint,
+                user_prompt=message.user_prompt or "",
+                model_response=message.model_response,
+                verdict=message.verdict or "",
+                confidence_score=message.confidence_score or 0.0,
+                analysis=message.analysis or "",
+                issues=issues,
+                recommendations=recommendations,
+                image_url=message.image_url or "",
+                created_at=message.created_at.isoformat()
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error retrieving message: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to retrieve message: {str(e)}")
 
 
 async def save_to_database(endpoint: str, user_prompt: str, response: ResponseStructure, image_url: str = "", conversation_id: Optional[str] = None):
@@ -505,7 +531,6 @@ async def text_response(prompt: str, instructions: str) -> ResponseStructure:
                 system_instruction=instructions
             )
         )
-
 
         return parse_analysis_response(response.text if response.text else "No response")
 
