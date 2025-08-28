@@ -14,7 +14,8 @@ from sqlalchemy import select
 # Import from models
 from models import (
     AsyncSessionLocal, Conversation, Messages, UserLogs, firebase_config, firebase_bucket_name,
-    ResponseStructure, ConversationResponse, MessageResponse, ConversationWithMessages, UserLogResponse
+    ResponseStructure, ConversationResponse, MessageResponse, ConversationWithMessages, UserLogResponse,
+    ValidationLedgerResponse, ValidationLedgerItem
 )
 
 # Initialize Gemini client globally
@@ -325,6 +326,56 @@ async def get_all_logs(limit: int = 100, offset: int = 0) -> List[UserLogRespons
         print(f"Error retrieving all logs: {str(e)}")
         raise HTTPException(
             status_code=500, detail=f"Failed to retrieve all logs: {str(e)}")
+
+
+async def get_validation_ledger(conversation_id: str):
+    """Get all photos in a conversation with their status, confidence, and date"""
+    try:
+        async with AsyncSessionLocal() as db:
+            # First verify the conversation exists
+            conversation_stmt = select(Conversation).where(
+                Conversation.id == uuid.UUID(conversation_id)
+            )
+            conversation_result = await db.execute(conversation_stmt)
+            conversation = conversation_result.scalar_one_or_none()
+
+            if not conversation:
+                raise HTTPException(
+                    status_code=404, detail="Conversation not found")
+
+            # Query all messages with photos in this conversation
+            messages_stmt = select(Messages).where(
+                Messages.conversation_id == uuid.UUID(conversation_id),
+                Messages.image_url.isnot(None),
+                Messages.image_url != ""
+            ).order_by(Messages.created_at)
+
+            messages_result = await db.execute(messages_stmt)
+            messages = messages_result.scalars().all()
+
+            # Convert to response format
+            photos = []
+            for msg in messages:
+                photos.append({
+                    "message_id": str(msg.id),
+                    "image_url": msg.image_url,
+                    "status": msg.verdict or "Unknown",
+                    "confidence_score": msg.confidence_score or 0.0,
+                    "endpoint": msg.endpoint,
+                    "created_at": msg.created_at.isoformat()
+                })
+
+            return {
+                "conversation_id": conversation_id,
+                "total_photos": len(photos),
+                "photos": photos
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error retrieving validation ledger: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to retrieve validation ledger: {str(e)}")
 
 
 async def create_conversation(user_id: str, endpoint_name: str) -> ConversationResponse:

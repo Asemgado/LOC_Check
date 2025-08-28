@@ -3,8 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from typing import Optional, List
 import uvicorn
-from controller import InspectionController, create_conversation, get_conversation, get_message, get_user_logs, get_user_conversations, get_all_logs
-from models import create_tables, ConversationResponse, ConversationWithMessages, MessageResponse, UserLogResponse
+from controller import InspectionController, create_conversation, get_conversation, get_message, get_user_logs, get_user_conversations, get_all_logs, get_validation_ledger
+from models import create_tables, ConversationResponse, ConversationWithMessages, MessageResponse, UserLogResponse, ValidationLedgerResponse
 
 # Lifespan manager
 import uvicorn
@@ -95,6 +95,12 @@ async def get_user_logs_endpoint(user_id: str, limit: int = 100):
 async def get_all_logs_endpoint(limit: int = 100, offset: int = 0):
     """Get all system logs with pagination"""
     return await get_all_logs(limit, offset)
+
+
+@app.get("/validation-ledger/{conversation_id}", response_model=ValidationLedgerResponse, tags=["Validation"])
+async def get_validation_ledger_endpoint(conversation_id: str):
+    """Get validation ledger - all photos in a conversation with their status, confidence, and date"""
+    return await get_validation_ledger(conversation_id)
 
 
 @app.post("/sealing", tags=["Inspections"])

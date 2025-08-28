@@ -1,6 +1,4 @@
-import os
-import uuid
-import json
+import os, uuid, json
 from typing import List, Optional
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -158,3 +156,19 @@ class UserLogResponse(BaseModel):
     user_agent: Optional[str]
     duration_ms: Optional[float]
     created_at: str
+
+
+# Validation Ledger Response Model
+class ValidationLedgerItem(BaseModel):
+    message_id: str
+    image_url: str
+    status: str  # verdict
+    confidence_score: float
+    endpoint: str
+    created_at: str
+
+
+class ValidationLedgerResponse(BaseModel):
+    conversation_id: str
+    total_photos: int
+    photos: List[ValidationLedgerItem]
